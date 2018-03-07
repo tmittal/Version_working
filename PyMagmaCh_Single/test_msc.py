@@ -148,31 +148,31 @@ def func_evolve_init_cond(exp_mod):
     return exp_mod
 
 func_evolve_init_cond(exp_mod)
-#exp_mod.times_list.finalize()
-# plt.ion()
-# plt.show()
-# plt.figure(10)
-# X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
-# plt.contourf(X,Y/3e7,(exp_mod.P_out_all/1e6),20,cmap='coolwarm')
-# plt.colorbar()
+exp_mod.times_list.finalize()
+plt.ion()
+plt.show()
+plt.figure(10)
+X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
+plt.contourf(X,Y/3e7,(exp_mod.P_out_all/1e6),20,cmap='coolwarm')
+plt.colorbar()
 
+
+#plt.savefig(pref_val+'P_fl.pdf')
 #
-# #plt.savefig(pref_val+'P_fl.pdf')
-# #
-# plt.figure(11)
-# X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
-# plt.contourf(X,Y/3e7,-(exp_mod.sigma_rr_all/1e6),20,cmap='coolwarm')
-# plt.colorbar()
-# # plt.savefig(pref_val+'sigma_rr.pdf')
-# #
-# plt.figure(12)
-# X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
-# plt.contourf(X,Y/3e7,exp_mod.T_out_all,20,cmap='coolwarm')
-# plt.colorbar()
+plt.figure(11)
+X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
+plt.contourf(X,Y/3e7,-(exp_mod.sigma_rr_all/1e6),20,cmap='coolwarm')
+plt.colorbar()
+# plt.savefig(pref_val+'sigma_rr.pdf')
 #
-# plt.figure(13)
-# X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
-# plt.contourf(X,Y/3e7,-(exp_mod.sigma_eff_rr_all/1e6),20,cmap='coolwarm')
-# plt.colorbar()
-# # plt.savefig(pref_val+'sigma_rr_eff.pdf')
-#
+plt.figure(12)
+X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
+plt.contourf(X,Y/3e7,exp_mod.T_out_all,20,cmap='coolwarm')
+plt.colorbar()
+
+plt.figure(13)
+X,Y = np.meshgrid(exp_mod.R_outside,exp_mod.times_list.data)
+plt.contourf(X,Y/3e7,-(exp_mod.sigma_eff_rr_all/1e6),20,cmap='coolwarm')
+plt.colorbar()
+# plt.savefig(pref_val+'sigma_rr_eff.pdf')
+

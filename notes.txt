@@ -1,0 +1,29 @@
+March 5th/6th 2018 :
+
+Conclusions from the foray into thinking about a stepped version for the Laplace domain solutions (why can't change the
+permeability etc) :
+
+a. The solution is most straightforwardly defined for homogeneous initial conditions in the Laplace space - in other words,
+the solution is calculated most easily when the equations are homogeneous (when converting the two temp and pressure coupled
+equations into a set of uncoupled 4th order ode's). In order to calculate the solution for this non-homonegeonous (if the
+initial conditions are not homogeneous) ode, the general + specific solution requires an integral that is difficult/not clear how to
+do analytically. Furthermore, the solution is needed as a step in pluggin in the initial conditions to calculate the
+constants as well as followed by laplace inversion numerically most likely. All of this is prone to numerical challenges and will
+be likely pretty slow ..
+
+b. Same type of issues show up if one tries to make permeability a function of time (or even just sums of Heavyside functions)
+since the laplace transform of a f(x)g(x) is not straightforward enough for the subsequent steps. There are additional intrinsic
+issues with making the permeability pressure or space/temp dependent - both in terms of assumptions of derivations as well
+as procedural/numerics.
+
+
+c. Seems that likely the most feasible thing to do is to use the uncoupled thermo-poro-elastic solutions ---
+here the temperature is uncoupled (small error at best since no convection anyways) while the poro/elasto is fully coupled.
+
+We can then use the Green's function approach to calculate the solution for the pressure and temp with initial conditions
+specified. This Green's function is seemingly only tractible for the case of the fixed temp/pressure bndry condition - not the flux
+boundary condition.
+
+So, to first order, it seems reasonable to incur a small penalty with that - use always the fully coupled solution with
+constant properties for the flux (fluid flux from magma chamber) - note that this extra flux term is needed in our equations
+since we do not calculate the convective heat flux piece explicitly.

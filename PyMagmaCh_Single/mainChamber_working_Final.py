@@ -83,16 +83,56 @@ class Chamber_Problem(Explicit_Problem):
         self.param['M_out_rate'] = 1e2  # kg/s
         self.param['material']        = 'Westerly_Granite' # Granite , 2 is Sandstone
         self.crust_analy_params = Anl_sols.Analytical_crust_params()
-        self.T_fluid_mean = self.param['T_S']
+        self.T_fluid_mean = 750. #self.param['T_S']
         self.crust_analy_params.set_viscosity(self.T_fluid_mean,10*1e6) # 2nd parameter is pressure (Pa)
         self.crust_analy_params.set_constants(self.param['material'],self.permeability)
         self.tmax = -1
         self.eruption_events = {}
         self.eruption_count = 0
+        self.extra_vals = 0
+        self.permeability_frac = 1e-16
+        self.initial_T_out  = np.array([])
+        self.initial_P_out   = np.array([])
+        self.initial_sigma_rr  = np.array([])
+        self.initial_sigma_theta  = np.array([])
+        self.perm_evl_init=np.array([])
+        self.perm_evl_init_time = np.array([])
+        self.allow_diffusion_init = True
+
+    def set_init_crust(self,material = 'Westerly_Granite'):
+        self.R_outside = np.linspace(self.radius, 3. * self.radius, self.R_steps)
+        self.set_params_crust_calcs(material)
+        self.crust_analy_params.set_misc_grids(self.R_outside)
+        self.T_out_all = np.array([self.R_outside * 0.])
+        self.P_out_all = np.array([self.R_outside * 0.])
+        self.sigma_rr_all = np.array([self.R_outside * 0.])
+        self.sigma_theta_all = np.array([self.R_outside * 0.])
+        self.sigma_eff_rr_all = np.array([self.R_outside * 0.])
+        self.sigma_eff_theta_all = np.array([self.R_outside * 0.])
+        self.max_count = 1  # counting for the append me arrays ..
+
+    def set_init_crust_profile(self,T_0):
+        self.P_list.update(0.)
+        self.T_list.update(T_0 - self.param['T_S'])
+        self.P_flux_list.update(0)
+        self.T_flux_list.update(0)
+        self.times_list.update(1.)
+        self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = \
+            self.crust_analy_params.Analytical_sol_cavity_T_Use(self.T_list.data[:self.max_count],
+                                                                   self.P_list.data[:self.max_count],
+                                                                   self.radius,
+                                                                   self.times_list.data[:self.max_count],
+                                                                   self.T_flux_list.data[:self.max_count],
+                                                                   self.P_flux_list.data[:self.max_count])
+        self.initial_T_out = self.T_out*0.
+        self.initial_P_out = self.P_out*0.
+        self.initial_sigma_rr = self.sigma_rr*0.
+        self.initial_sigma_theta = self.sigma_theta*0.
+        begin_time = self.func_evolve_init_cond(T_0)
+        return begin_time
 
     def set_random_Pcrit(self):
         '''
-
         :return:
         '''
         delta_Pc = np.random.randint(10,50) # assume a critical overpressure btw 10 - 50 MPa
@@ -113,7 +153,7 @@ class Chamber_Problem(Explicit_Problem):
     def set_params_crust_calcs(self,material):
         self.param['material']        = material # Granite , 2 is Sandstone
         self.crust_analy_params = Anl_sols.Analytical_crust_params()
-        self.T_fluid_mean = self.param['T_S']
+        self.T_fluid_mean = 750. #self.param['T_S']
         self.crust_analy_params.set_viscosity(self.T_fluid_mean,self.plith) # 2nd parameter is pressure (Pa)
         self.crust_analy_params.set_constants(self.param['material'],self.permeability)
 
@@ -133,6 +173,105 @@ class Chamber_Problem(Explicit_Problem):
         self.param.update(mat_const)  # specify the constants for the model
         self.plith = self.calc_lith_pressure()
 
+    def func_evolve_init_cond(self,T_0):
+        '''
+        Calculate the initial evolution of the system - regularize the pore pressure condition
+        :param self:
+        :return:
+        '''
+        ### First evolve the solution to a 1 yr (a few points is ok since everything is analytical ..)
+        times_evolve_p1 = np.linspace(1e3,3.*np.pi*1e7,3)
+        for i in times_evolve_p1:
+            self.P_list.update(0.)
+            self.T_list.update(T_0 - self.param['T_S'])
+            self.T_flux_list.update(0.)
+            self.P_flux_list.update(0.)
+            self.times_list.update(i)
+            self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = \
+                self.crust_analy_params.Analytical_sol_cavity_T_Use(self.T_list.data[:self.max_count],
+                                self.P_list.data[:self.max_count],self.radius, self.times_list.data[:self.max_count],
+                                self.T_flux_list.data[:self.max_count],self.P_flux_list.data[:self.max_count])
+            self.max_count += 1
+            self.P_out_all = np.vstack([self.P_out_all,self.P_out])
+            self.T_out_all = np.vstack([self.T_out_all,self.T_out])
+            self.sigma_rr_all = np.vstack([self.sigma_rr_all,self.sigma_rr])
+            self.sigma_theta_all = np.vstack([self.sigma_theta_all,self.sigma_theta])
+        indx_use_P = np.where(self.R_outside <=(1.+self.param['frac_rad_press'])*self.radius)
+        self.sigma_rr_eff = -(self.sigma_rr + self.P_out) # in Pa - +ve is compression, -ve is tension
+        self.mean_sigma_rr_eff  = np.mean(self.sigma_rr_eff[indx_use_P])   # effective stress total ..
+        self.min_sigma_rr_eff  = np.min(self.sigma_rr_eff)   # effective stress total ..
+        begin_time = times_evolve_p1[-1]
+        value4 = (self.min_sigma_rr_eff + self.param['delta_Pc'])  ## This is positive if max tensile stress is less than delta_Pc
+        print('here',value4 / 1e6)
+        print(self.min_sigma_rr_eff/self.param['delta_Pc'])
+        self.extra_vals = 10
+        if self.allow_diffusion_init ==True :
+            if self.min_sigma_rr_eff < -0.95*self.param['delta_Pc'] :
+                begin_time = self.func_evolve_relax_pressure()
+        return begin_time*1.01
+
+
+    def func_evolve_relax_pressure(self):
+        '''
+        Calculate the initial evolution of the system - regularize the pore pressure condition
+        :param self:
+        :return:
+        '''
+        perm_chng_fac = 1.5
+        times_evolve_p1 = np.linspace(3.* np.pi * 1e7, np.pi * 1e7 * 1e2, 100)
+        perm_init = self.permeability
+        excess_press = True
+        i_count = 0
+        self.perm_evl_init = np.append(self.perm_evl_init,perm_init)
+        self.perm_evl_init_time = np.append(self.perm_evl_init,times_evolve_p1[0])
+        P_cond = self.P_list.data[self.max_count-1] ## Keep this constant with time for the subsequent evolution ..
+        T_cond = self.T_list.data[self.max_count-1] ## Keep this constant with time for the subsequent evolution ..
+        while excess_press :
+            self.permeability = self.permeability*perm_chng_fac
+            self.perm_evl_init = np.append(self.perm_evl_init,self.permeability)
+            self.set_params_crust_calcs('Westerly_Granite')
+            self.crust_analy_params.set_misc_grids(self.R_outside)
+            self.P_list.update(P_cond)
+            self.T_list.update(T_cond)
+            self.T_flux_list.update(0.)
+            self.P_flux_list.update(0.)
+            self.times_list.update(times_evolve_p1[i_count])
+            self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = self.crust_analy_params.Analytical_sol_cavity_T_Use\
+                (self.T_list.data[:self.max_count],self.P_list.data[:self.max_count],self.radius, self.times_list.data[:self.max_count],
+                 self.T_flux_list.data[:self.max_count], self.P_flux_list.data[:self.max_count])
+            self.max_count += 1
+            i_count += 1
+            self.sigma_rr_eff = -(self.sigma_rr + self.P_out) # in Pa
+            self.min_sigma_rr_eff  = np.min(self.sigma_rr_eff)   # effective stress total ..
+            if self.min_sigma_rr_eff > -0.95 * self.param['delta_Pc'] :
+                excess_press = False
+            self.P_out_all = np.vstack([self.P_out_all,self.P_out])
+            self.T_out_all = np.vstack([self.T_out_all,self.T_out])
+            self.sigma_rr_all = np.vstack([self.sigma_rr_all,self.sigma_rr])
+            self.sigma_theta_all = np.vstack([self.sigma_theta_all,self.sigma_theta])
+            value4 = (self.min_sigma_rr_eff + self.param[
+                'delta_Pc'])  ## This is positive if max tensile stress is less than delta_Pc
+            print('here', value4 / 1e6)
+        self.perm_evl_init_time = np.append(self.perm_evl_init_time,times_evolve_p1[1:i_count])
+        begin_time = self.perm_evl_init_time[-1]
+        self.permeability = perm_init
+        self.set_params_crust_calcs('Westerly_Granite')
+        self.crust_analy_params.set_misc_grids(self.R_outside)
+        self.T_out_o, self.P_out_o, self.sigma_rr_o, self.sigma_theta_o,_ = self.crust_analy_params.Analytical_sol_cavity_T_Use \
+            (self.T_list.data[:self.max_count-1], self.P_list.data[:self.max_count-1], self.radius,
+             self.times_list.data[:self.max_count-1],self.T_flux_list.data[:self.max_count-1], self.P_flux_list.data[:self.max_count-1])
+        self.extra_vals = 10 + i_count
+        self.initial_T_out = self.T_out_o - self.T_out
+        self.initial_P_out = self.P_out_o - self.P_out
+        self.initial_sigma_rr = self.sigma_rr_o - self.sigma_rr
+        self.initial_sigma_theta = self.sigma_theta_o - self.sigma_theta
+        indx_use_P = np.where(self.R_outside <=(1.+self.param['frac_rad_press'])*self.radius)
+        self.sigma_rr_eff = -(self.sigma_rr + self.P_out) # in Pa
+        self.mean_sigma_rr_eff  = np.mean(self.sigma_rr_eff[indx_use_P])   # effective stress total ..
+        self.min_sigma_rr_eff  = np.min(self.sigma_rr_eff)   # effective stress total ..
+        print('Used func_evolve_relax_pressure, permeability decrease factor {:.2f}'.format(self.perm_evl_init[-1]/perm_init))
+        return begin_time
+
     def rhs(self,t,y,sw) :
         '''
         The right-hand-side function (rhs) for the integrator
@@ -140,62 +279,35 @@ class Chamber_Problem(Explicit_Problem):
         ######################################################################################################
         P = y[0]
         T = y[1]
+        V = y[3]
+        a = (V/(4.*np.pi/3))**(1./3.)
+        self.radius = a
         eruption = sw[4]   # This tells whether eruption is yes or no
-        inside_loop = 0
         if t > self.tcurrent :
             self.dt = t-self.tcurrent
             self.dt_counter +=self.dt
             self.tcurrent = t
-            inside_loop = 1
-            # self.dt_counter = 0.
             self.P_list.update(P - self.plith)
             self.T_list.update(T - self.param['T_S'])
             self.times_list.update(t)
             self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = self.crust_analy_params.Analytical_sol_cavity_T_Use(
                 self.T_list.data[:self.max_count], self.P_list.data[:self.max_count], self.radius,
-                self.times_list.data[:self.max_count])
+                self.times_list.data[:self.max_count], self.T_flux_list.data[:self.max_count],self.P_flux_list.data[:self.max_count])
             self.max_count += 1
-            if np.max(self.P_out) > self.param['delta_Pc'] :
-                times_evolve_p1 = np.linspace(t*1.001, t + np.pi * 1e7 * 10, 100)
-                perm_chng_fac = 2.
-                begin_time = self.func_evolve_overpressure(times_evolve_p1,perm_chng_fac)
-            # if (self.dt_counter/self.dt_crst > 0.95) :
-            #     inside_loop = 1
-            #     self.dt_counter = 0.
-            #     self.P_list.update(P-self.plith)
-            #     self.T_list.update(T-self.param['T_S'])
-            #     self.times_list.update(t)
-            #     self.T_out,self.P_out,self.sigma_rr,self.sigma_theta,self.T_der = self.crust_analy_params.Analytical_sol_cavity_T_Use(self.T_list.data[:self.max_count],self.P_list.data[:self.max_count],self.radius,self.times_list.data[:self.max_count])
-            #     self.max_count +=1
-            #     self.T_out_p2,self.P_out_p2 = Analytical_sol_cavity_T_grad_Use(self.T_flux_list,self.P_flux_list,self.radius,self.times_list,self.R_outside,self.permeability,self.param['material'])
-            #     self.T_out = self.T_out_p1 #+ self.T_out_p2
-            #     self.P_out = self.P_out_p1 #+ self.P_out_p2
-            #     pdb.set_trace()
-            #     self.P_out_all = np.vstack([self.P_out_all,self.P_out])
-            #     self.T_out_all = np.vstack([self.T_out_all,self.T_out])
-            #     self.sigma_rr_all = np.vstack([self.sigma_rr_all,self.sigma_rr])
-            #     self.sigma_theta_all = np.vstack([self.sigma_theta_all,self.sigma_theta])
-            #     self.sigma_eff_rr_all = np.vstack([self.sigma_eff_rr_all,self.sigma_rr + self.P_out])
-            #     self.sigma_eff_theta_all = np.vstack([self.sigma_eff_theta_all,self.sigma_theta+self.P_out])
-            #     print(t)
-            #     if  eruption ==1 :
-            #         inside_loop = 1
-            #         self.dt_counter = 0.
-            #         self.P_list.update(P-self.plith)
-            #         self.T_list.update(T-self.param['T_S'])
-            #         self.times_list.update(t)
-            #         self.T_out,self.P_out,self.sigma_rr,self.sigma_theta,self.T_der = Analytical_sol_cavity_T_Use(self.T_list.data[:self.max_count],self.P_list.data[:self.max_count],self.radius,self.times_list.data[:self.max_count],self.R_outside,self.permeability,self.param['material'])
-            #         self.max_count +=1
-            #         #self.P_out_all = np.vstack([self.P_out_all,self.P_out])
-            #         #self.T_out_all = np.vstack([self.T_out_all,self.T_out])
-            #         #self.sigma_rr_all = np.vstack([self.sigma_rr_all,self.sigma_rr])
-            #         #self.sigma_theta_all = np.vstack([self.sigma_theta_all,self.sigma_theta])
-            #         #self.sigma_eff_rr_all = np.vstack([self.sigma_eff_rr_all,self.sigma_rr + self.P_out])
-            #         #self.sigma_eff_theta_all = np.vstack([self.sigma_eff_theta_all,self.sigma_theta+self.P_out])
+            pdb.set_trace()
+            self.T_out       -= self.initial_T_out*np.exp(-t/self.t0/self.param['relax_press_init'])
+            self.P_out       -= self.initial_P_out*np.exp(-t/self.t0/self.param['relax_press_init'])
+            self.sigma_rr    -= self.initial_sigma_rr*np.exp(-t/self.t0/self.param['relax_press_init'])
+            self.sigma_theta -= self.initial_sigma_theta*np.exp(-t/self.t0/self.param['relax_press_init'])
+            self.P_out_all = np.vstack([self.P_out_all,self.P_out])
+            self.T_out_all = np.vstack([self.T_out_all,self.T_out])
+            self.sigma_rr_all = np.vstack([self.sigma_rr_all,self.sigma_rr])
+            self.sigma_theta_all = np.vstack([self.sigma_theta_all,self.sigma_theta])
+            #self.sigma_eff_rr_all = np.vstack([self.sigma_eff_rr_all,self.sigma_rr + self.P_out])
+            #self.sigma_eff_theta_all = np.vstack([self.sigma_eff_theta_all,self.sigma_theta+self.P_out])
         else :
             self.dt = 0.
         eps_g = y[2]
-        V = y[3]
         dV_dP = V/self.param['beta_r']
         dV_dT = -V*self.param['alpha_r']
         rho_m = y[4]
@@ -234,7 +346,13 @@ class Chamber_Problem(Explicit_Problem):
         Mdot_v_in      = self.param['m_eq_in']*rho_m_in*(1.-self.param['eps_g_in']-eps_x_in)*Mdot_in/rho_in + rho_g_in*self.param['eps_g_in']*Mdot_in/rho_in
         Hdot_in        = c_in*self.param['T_in']*Mdot_in
 
-        a = (V/(4.*np.pi/3))**(1./3.)
+        P_buoyancy = -(rho - self.param['crustal_density']) * const.g_earth * a  # delta_rho*g*h
+        # tmp_val =  (P-self.plith + P_buoyancy) - self.param['delta_Pc']*0.95
+        # if tmp_val > 0 :
+        #     value_diking = True
+        # else :
+        #     value_diking = False
+
         indx_use_P = np.where(self.R_outside <=(1.+self.param['frac_rad_press'])*a)
         indx_use_T = np.where(self.R_outside <=(1.+self.param['frac_rad_Temp'])*a)
         indx_use_visc = np.where(self.R_outside <=(1.+self.param['frac_rad_visc'])*a)
@@ -242,13 +360,14 @@ class Chamber_Problem(Explicit_Problem):
         mean_T_out = np.mean(self.T_out[indx_use_T]) + self.param['T_S']
         mean_P_out  = np.mean(self.P_out[indx_use_P]) + self.plith
         ###############################################################
-        self.T_fluid_mean = mean_T_out
-        self.crust_analy_params.set_viscosity(self.T_fluid_mean,mean_P_out)
-        self.crust_analy_params.set_constants(self.param['material'],self.permeability)
+        # self.T_fluid_mean = mean_T_out
+        # self.crust_analy_params.set_viscosity(self.T_fluid_mean,mean_P_out)
+        # self.crust_analy_params.set_constants(self.param['material'],self.permeability)
         ###############################################################
         mean_sigma_rr_out  = -np.mean(self.sigma_rr[indx_use_visc]) + self.plith
         visc_gas =  self.crust_analy_params.visc
-        #############################################################
+        # #############################################################
+        # ###########################################################
         if self.param['heat_cond'] == 1.:
             if t< 30e7 : # Initially the gradients are kind of large .. so may be unstable ..
                 small_q =  -self.param['k_crust']*(mean_T_out-T)/(self.param['frac_rad_Temp']*a)
@@ -264,9 +383,8 @@ class Chamber_Problem(Explicit_Problem):
         if np.isnan(Q_out):
             pdb.set_trace()
             raise ValueError('Q_out is NaN')
-        # pdb.set_trace()
         # #############################################################
-        #% set outflow conditions
+        # #############################################################
         if eruption == False:
             if self.param['vol_degass'] == 1.:
                 surface_area_chamber_degassing = 4.*np.pi*a**2.*self.param['degass_frac_chm']
@@ -297,60 +415,62 @@ class Chamber_Problem(Explicit_Problem):
                 #         Mdot_out =  Mdot_out2 + Mdot_out1
                 #         degass_hdot_water = degass_hdot_water2 +degass_hdot_water1
                 #         Q_fluid_flux_out = Mdot_out1/surface_area_chamber_degassing/rho_g # extra term for the pressure equation .., m/s (i.e a velocity )
-                # QH_fluid_flux_out = np.copy(degass_hdot_water)/surface_area_chamber_degassing # W/m^2
+                QH_fluid_flux_out = np.copy(degass_hdot_water)/surface_area_chamber_degassing # W/m^2
             else :
                 Mdot_out = 0.
                 degass_hdot_water = 0.
+                QH_fluid_flux_out = 0.
                 # Q_fluid_flux_out = 0.
                 # QH_fluid_flux_out = 0.
             Mdot_v_out = np.copy(Mdot_out) # mass loss = water loss rate
             Hdot_out = Q_out +degass_hdot_water
         elif eruption == True :
             ##########################
-            surface_area_chamber_degassing = 4.*np.pi*a**2.*self.param['degass_frac_chm']
-            delta_P_grad = (P - mean_P_out)/a/self.param['frac_length']
-            # Note that there is no buoyancy term since the fluid is in equilbrium
-            # (Pressure is perturbation over bkg)
-            if self.param['vol_degass'] == 1.:
+            if self.param['vol_degass'] == 1. :
+                # Note that there is no buoyancy term since the fluid is in equilbrium
+                # (Pressure is perturbation over bkg)
+                surface_area_chamber_degassing = 4. * np.pi * a ** 2. * self.param['degass_frac_chm']
+                delta_P_grad = (P - mean_P_out) / a / self.param['frac_length']
                 U_og2 = (self.permeability/visc_gas)*(delta_P_grad)
                 Mdot_out2 = eps_g*rho_g*surface_area_chamber_degassing*U_og2
                 degass_hdot_water = self.param['c_g']*T*Mdot_out2
+                QH_fluid_flux_out = np.copy(degass_hdot_water) / surface_area_chamber_degassing  # W/m^2
             else :
                 Mdot_out2 = 0.
                 degass_hdot_water = 0.
-            # QH_fluid_flux_out = np.copy(degass_hdot_water)/surface_area_chamber_degassing # W/m^2
+                QH_fluid_flux_out = 0.
             ##########################
-            P_buoyancy = -(rho - self.param['crustal_density'])*const.g_earth*a  # delta_rho*g*h
+            # if value_diking :
             Mdot_out1 = self.input_functions.crit_outflow\
                 (eps_x,m_eq,T,rho,self.param['depth'],self.param['Area_conduit'],
                  self.param['S'],(P-self.plith + P_buoyancy),
                  additional_model=self.param['outflow_model'])
-            # Mdot_out1 = self.param['M_out_rate'] #
             Mdot_v_out = m_eq*rho_m*(1.-eps_g-eps_x)*Mdot_out1/rho + rho_g*eps_g*Mdot_out1/rho + Mdot_out2
             Mdot_out = Mdot_out1 + Mdot_out2
             Hdot_out = c*T*Mdot_out1 + Q_out + degass_hdot_water
+            # else :
+            #     surface_area_chamber_degassing = 4. * np.pi * a ** 2. * self.param['degass_frac_chm']
+            #     delta_P_grad = (P - mean_P_out) / a / self.param['frac_length']
+            #     U_og1 = (self.permeability_frac/ visc_gas) * (delta_P_grad)
+            #     Mdot_out1 = eps_g * rho_g * surface_area_chamber_degassing * U_og1
+            #     degass_hdot_water1 = self.param['c_g'] * T * Mdot_out2
+            #     Mdot_v_out = Mdot_out1 + Mdot_out2
+            #     Mdot_out   = Mdot_out1 + Mdot_out2
+            #     Hdot_out   = degass_hdot_water1 + Q_out + degass_hdot_water
         else:
             raise NotImplementedError('eruption not specified')
         #############################################################
-        if (inside_loop == 1) :
-                #if eruption ==0 :
-                # self.P_flux_list = np.hstack([self.P_flux_list,Q_fluid_flux_out])
-                # self.T_flux_list = np.hstack([self.T_flux_list,QH_fluid_flux_out])
-                self.flux_in_vol.update(Mdot_v_in)
-                self.flux_out_vol.update(Mdot_v_out)
-                #    #else :
-                #         # self.P_flux_list = np.hstack([self.P_flux_list,0]) # no extra flux term ...
-                #         # self.T_flux_list = np.hstack([self.T_flux_list,0]) # no extra flux term ...
-                #         #pdb.set_trace()
-                #         self.flux_in_vol.update(Mdot_v_in)
-                #         self.flux_out_vol.update(Mdot_v_out)
+        self.T_flux_list.update(QH_fluid_flux_out)
+        self.P_flux_list.update(0.)
+        self.flux_in_vol.update(Mdot_v_in)
+        self.flux_out_vol.update(Mdot_v_out)
         # #############################################################
         #% viscous relaxation -         #% crustal viscosity (Pa s)
-        #length_met = a*(self.param['frac_rad_press']) # 1000.; %2.*a; %1000;      % Typical lengthscale for pressure diffusion ... (metamorphic aureole length-scale)
+        #############################################################
         eta_r_new = self.input_functions.crustal_viscosity(self.T_out[indx_use_visc],self.R_outside[indx_use_visc])
         if self.param['visc_relax'] == 1.:
-            P_loss1 = (P-self.plith)/eta_r_new
-            #P_loss1 = (P-mean_sigma_rr_out)/eta_r_new
+            # P_loss1 = (P-self.plith)/eta_r_new
+            P_loss1 = (P-mean_sigma_rr_out)/eta_r_new
         elif self.param['visc_relax'] == 0.:
             P_loss1 = 0.
         else:
@@ -367,11 +487,12 @@ class Chamber_Problem(Explicit_Problem):
         # #############################################################
         # #############################################################
         P_loss = P_loss1 + P_loss2
-        # self.sigma_rr_eff = -(self.sigma_rr + self.P_out)/1e6 # in Pa
-        # self.mean_sigma_rr_eff  = np.mean(self.sigma_rr_eff[indx_use_P])
-        # if (eruption == 0.) and (np.abs(self.mean_sigma_rr_eff) > 20):
-        #    print('EEEE')
-        # #############################################################
+        self.sigma_rr_eff = -(self.sigma_rr + self.P_out) # in Pa
+        self.mean_sigma_rr_eff  = np.mean(self.sigma_rr_eff[indx_use_P])   # effective stress total ..
+        self.min_sigma_rr_eff  = np.min(self.sigma_rr_eff)   # effective stress total ..
+        value4= (self.min_sigma_rr_eff+self.param['delta_Pc']) ## This is positive if max tensile stress is less than delta_Pc
+        if value4 < 0. :
+            print('Reached min_sigma_rr_eff threshold, t = {}'.format(t/np.pi/1e7))
         # #############################################################
         # #############################################################
         #  coefficients in the system of unknowns Ax = B, here x= [dP/dt dT/dt dphi/dt ...]
@@ -449,14 +570,22 @@ class Chamber_Problem(Explicit_Problem):
         a = (V/(4.*np.pi/3))**(1./3.)
         P_buoyancy = -(rho - self.param['crustal_density'])*const.g_earth*a  # delta_rho*g*h
         if sw[4] : # is True (eruption)
-              value3 = self.plith - P
+              value3 = self.plith - P  # want the pressure inside the magma reservoir to decrease below lithostatic pressure ..
         else : # no eruption
               value3 = (P-self.plith + P_buoyancy) - self.param['delta_Pc']
+        # value4= (self.min_sigma_rr_eff+self.param['delta_Pc']) ## This is positive if max tensile stress is less than delta_Pc
+        # if (solver.sw[5] == True) :
+        #     print(solver.t/3e7, (self.min_sigma_rr_eff+self.param['delta_Pc'])/1e6)
+        #     print('Reached min_sigma_rr_eff threshold .. while eruption is {}'.format(solver.sw[4]))
+        # print(value4/1e6)
+        # # if (self.min_sigma_rr_eff < -self.param['delta_Pc']) :
+        # #       value4=1
+        # # value4 = (self.mean_sigma_rr_eff) - self.param['delta_Pc']
+        # # value4 = (self.min_sigma_rr_eff) - self.param['delta_Pc']
         value = np.array([value1a, value1b, value1c,value2,value3])
         #isterminal = np.array([1, 1, 1, 1, 1,1]) #% Stop the integration
         #direction = np.array([0, 0, 0, 1, 1, 0])
         return value
-
 
     #Helper function for handle_event
     def event_switch(self,solver, event_info):
@@ -484,17 +613,17 @@ class Chamber_Problem(Explicit_Problem):
                 break
 
     def init_mode(self,solver):
-        """
+        '''
         Initialize with the new conditions.
         """
         ## No change in the initial conditions (i.e. the values of the parameters when the eruption initiates .. - like P,V, ... T)
-        ## Maybe can use it to switch pore-pressure degassing on/off during eruption
-        #solver.y[1] = (-1.0 if solver.sw[1] else 3.0)
-        #solver.y[2] = (0.0 if solver.sw[2] else 2.0)
         ## Gas (eps_g = zero), eps_x is zero, too many crystals, 50 % crystallinity,eruption (yes/no)
+        :param solver:
+        :return:
+        '''
         if (solver.sw[3] ==True) and (solver.sw[4] == True):
             print('critical pressure - {:f} MPa reached but eps_x>{:.0f}'.format(self.param['delta_Pc']/1e6,self.param['eta_x_max']))
-            sys.exit(solver.t_sol)
+            sys.exit(solver.t)
         if solver.sw[0]:
             print('eps_g became 0.')
         if True in solver.sw[0:4] :
@@ -505,7 +634,7 @@ class Chamber_Problem(Explicit_Problem):
                 print('eps_x/(1-eps_g) became 0.8')
             elif solver.sw[3] :
                 print('eps_x became {:f}'.format(self.param['eta_x_max']))
-            sys.exit(solver.t_sol)
+            sys.exit(solver.t)
         if (solver.sw[4] == True) :
             self.eruption_events[str(self.eruption_count)] = solver.t/np.pi/1e7,solver.y
             self.eruption_count += 1
@@ -513,81 +642,14 @@ class Chamber_Problem(Explicit_Problem):
 
     #Helper function for handle_event
     def check_eIter(self,before, after):
-        """
+        '''
         Helper function for handle_event to determine if we have event
         iteration.
          Input: Values of the event indicator functions (state_events)
          before and after we have changed mode of operations.
-        """
+        '''
         eIter = [False]*len(before)
         for i in range(len(before)):
              if (before[i] < 0.0 and after[i] > 0.0) or (before[i] > 0.0 and after[i] < 0.0):
                  eIter[i] = True
         return eIter
-
-    def func_evolve_init_cond(self,T_0):
-        '''
-        Calculate the initial evolution of the system - regularize the pore pressure condition
-        :param self:
-        :return:
-        '''
-        ### First evolve the solution to a 1 yr (a few points is ok since everything is analytical ..)
-        times_evolve_p1 = np.linspace(1e3,np.pi*1e7,10)
-        for i in times_evolve_p1:
-            self.P_list.update(0.)
-            self.T_list.update(T_0 - self.param['T_S'])
-            self.times_list.update(i)
-            self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = \
-                self.crust_analy_params.Analytical_sol_cavity_T_Use(self.T_list.data[:self.max_count],
-                                                                       self.P_list.data[:self.max_count],
-                                                                       self.radius, self.times_list.data[:self.max_count])
-            #print(i,np.max(self.P_out) / self.param['delta_Pc'])
-            self.max_count += 1
-        #print(i,np.max(self.P_out) / self.param['delta_Pc'])
-        if np.max(self.P_out) > 0.8*self.param['delta_Pc'] :
-            times_evolve_p1 = np.linspace(1.5 * np.pi * 1e7, np.pi * 1e7 * 1e2, 100)
-            perm_chng_fac = 1.25
-            begin_time = self.func_evolve_overpressure(times_evolve_p1,perm_chng_fac)
-            return begin_time*1.01
-        else :
-            begin_time = np.pi*1e7
-            self.extra_vals = 10
-            return begin_time*1.01
-
-    def func_evolve_overpressure(self,times_evolve_p1,perm_chng_fac):
-        '''
-        Regularize the pore pressure condition
-        :param self:
-        :return:
-        '''
-        ### First evolve the solution to a 1 yr (a few points is ok since everything is analytical ..)
-        perm_init = self.permeability
-        excess_press = True
-        i_count = 0
-        self.perm_evl_init = np.append(self.perm_evl_init,perm_init)
-        self.perm_evl_init_time = np.append(self.perm_evl_init,perm_init)
-        P_cond = self.P_list.data[self.max_count-1] ## Keep this constant with time for the subsequent evolution ..
-        T_cond = self.T_list.data[self.max_count-1] ## Keep this constant with time for the subsequent evolution ..
-        while excess_press :
-            self.P_list.update(P_cond)
-            self.T_list.update(T_cond)
-            self.times_list.update(times_evolve_p1[i_count])
-            self.T_out, self.P_out, self.sigma_rr, self.sigma_theta, self.T_der = self.crust_analy_params.Analytical_sol_cavity_T_Use\
-                (self.T_list.data[:self.max_count],self.P_list.data[:self.max_count],self.radius, self.times_list.data[:self.max_count])
-            self.max_count += 1
-            i_count += 1
-            #plt.plot(self.R_outside,self.P_out/1e6)
-            #plt.pause(.2)
-            if np.max(self.P_out) < 0.99*self.param['delta_Pc'] :
-                excess_press = False
-            self.permeability = self.permeability*perm_chng_fac
-            self.set_params_crust_calcs('Westerly_Granite')
-            self.crust_analy_params.set_misc_grids(self.R_outside)
-            self.perm_evl_init = np.append(self.perm_evl_init,self.permeability)
-        #pdb.set_trace()
-        self.perm_evl_init_time = np.append(self.perm_evl_init_time,times_evolve_p1[0:i_count])
-        self.permeability = perm_init
-        begin_time = self.perm_evl_init_time[-1]
-        self.extra_vals = 10 + i_count
-        print('func_evolve_overpressure')
-        return begin_time*1.01
